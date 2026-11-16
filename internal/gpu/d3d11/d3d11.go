@@ -291,6 +291,12 @@ type Renderer struct {
 	// object. Windows 8.1 came with it: Windows 7 with the platform update
 	// refuses a swap chain made with its flag, and it is made again without.
 	waitable bool
+	// bitblt tells that the swap chain is the Windows 7 bitblt model: no flip,
+	// one buffer. Windows 7's flip model under DWM leaves stale regions when
+	// frames present with dirty rects (Present1) or when the window is not
+	// composed yet, which shows as a white window, or as the last frames
+	// overlapping, until something forces a full redraw.
+	bitblt bool
 
 	// composed tells that the swap chain shows on the window through
 	// DirectComposition, with its alpha, as the content of visual, the
@@ -607,7 +613,12 @@ func (r *Renderer) buffers(w, h, bw, bh, n int) error {
 	if r.swapChain == 0 {
 		desc := swapChainDesc1{Width: uint32(bw), Height: uint32(bh), Format: formatB8G8R8A8Unorm, SampleCount: 1,
 			BufferUsage: 0x20, BufferCount: uint32(n), Scaling: scalingStretch, SwapEffect: 3 /* flip sequential */, Flags: swapChainWaitable}
-		if flipRefused {
+		if windows7() {
+			// Windows 7: the bitblt model, always. Its flip model is what
+			// flickers there, and Present1 with dirty rects is flip-only.
+			desc.SwapEffect, desc.BufferCount, desc.Flags, desc.Scaling = 0 /* discard */, 1, 0, scalingStretch
+			r.waitable, r.bitblt = false, true
+		} else if flipRefused {
 			// Bitblt model: one buffer, no frame latency object. It works on
 			// Windows 7 without the flip model, and on child/layered windows.
 			desc.SwapEffect, desc.BufferCount, desc.Flags = 0 /* discard */, 1, 0
@@ -668,7 +679,7 @@ func (r *Renderer) buffers(w, h, bw, bh, n int) error {
 			call(r.factory, factoryMakeWindowAssoc, r.hwnd, noAltEnter)
 		}
 		call(r.swapChain, 0, uintptr(unsafe.Pointer(&iidIDXGISwapChain2)), uintptr(unsafe.Pointer(&r.swapChain2)))
-		if r.swapChain2 != 0 {
+		if r.swapChain2 != 0 && !r.bitblt {
 			// One frame waits ahead of the screen, which the frame
 			// latency object tells room for.
 			call(r.swapChain2, scSetMaxLatency, 1)
@@ -1837,7 +1848,7 @@ func (r *Renderer) present(sync uintptr) error {
 // show presents the back buffer, its token taken, or none needed.
 func (r *Renderer) show(sync uintptr) error {
 	var hr uintptr
-	if r.redrew == redrewPart {
+	if r.redrew == redrewPart && !r.bitblt {
 		params := presentParameters{DirtyRectsCount: uint32(len(r.part.Rects)), DirtyRects: unsafe.SliceData(r.part.Rects)}
 		hr = call(r.swapChain, scPresent1, sync, 0, uintptr(unsafe.Pointer(&params)))
 	} else {
