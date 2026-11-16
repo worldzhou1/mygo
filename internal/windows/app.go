@@ -149,6 +149,10 @@ func (b *Backend) Init(h platform.AppHandler, opts platform.AppOptions) error {
 	procCoInitializeEx.Call(0, coinitApartmentThreaded)
 	if has(procSetProcessDpiAwarenessContext) {
 		procSetProcessDpiAwarenessContext.Call(dpiAwarenessContextPerMonitorAwareV2)
+	} else if has(procSetProcessDPIAware) {
+		// Windows 7 has no per-monitor awareness: the process takes the system
+		// DPI, which its windows draw at the size of (dpiOf).
+		procSetProcessDPIAware.Call()
 	}
 	activateCommonControls()
 	if err := registerClasses(); err != nil {

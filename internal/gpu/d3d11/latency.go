@@ -211,6 +211,16 @@ const (
 	swapChainWaitable = 0x40
 )
 
+// swapChainFlags returns the flags the swap chain is made and resized with:
+// the frame latency object's, where the system has one. It came with Windows
+// 8.1, so Windows 7 makes the swap chain without it (see buffers).
+func (r *Renderer) swapChainFlags() uint32 {
+	if r.waitable {
+		return swapChainWaitable
+	}
+	return 0
+}
+
 type latency struct {
 	// handle is the object, 0 without one: frames then present at once.
 	handle uintptr

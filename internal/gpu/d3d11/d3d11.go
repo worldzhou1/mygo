@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"log"
 	"math"
 	"os"
 	"sync"
@@ -286,6 +287,10 @@ type Renderer struct {
 	rtv       uintptr
 	w, h      int  // the size drawn, which the swap chain shows
 	warp      bool // the device is WARP, Windows' software rasterizer
+	// waitable tells whether the swap chain is made with the frame latency
+	// object. Windows 8.1 came with it: Windows 7 with the platform update
+	// refuses a swap chain made with its flag, and it is made again without.
+	waitable bool
 
 	// composed tells that the swap chain shows on the window through
 	// DirectComposition, with its alpha, as the content of visual, the
@@ -417,7 +422,7 @@ func newRenderer(hwnd uintptr, composed bool) (*Renderer, error) {
 	if hwnd == 0 {
 		return nil, errors.New("d3d11: no window")
 	}
-	r := &Renderer{hwnd: hwnd, composed: composed, images: map[uint64]*texture{}}
+	r := &Renderer{hwnd: hwnd, composed: composed, waitable: true, images: map[uint64]*texture{}}
 	var err error
 	if r.device, r.ctx, r.warp, err = device.New(); err != nil {
 		return nil, err
@@ -604,6 +609,18 @@ func (r *Renderer) buffers(w, h, bw, bh, n int) error {
 				desc.Scaling = scalingStretch
 				hr = call(r.factory, factoryCreateSwapChainHwnd, r.device, r.hwnd, uintptr(unsafe.Pointer(&desc)), 0, 0, uintptr(unsafe.Pointer(&r.swapChain)))
 			}
+			if failed(hr) && r.waitable {
+				// The frame latency object came with Windows 8.1, and Windows 7
+				// with the platform update refuses a swap chain made with its
+				// flag: made without, as with an object of none, frames present
+				// at once (latency.go).
+				r.waitable = false
+				desc.Flags = 0
+				hr = call(r.factory, factoryCreateSwapChainHwnd, r.device, r.hwnd, uintptr(unsafe.Pointer(&desc)), 0, 0, uintptr(unsafe.Pointer(&r.swapChain)))
+				if !failed(hr) {
+					log.Printf("mygo: the swap chain has no frame latency object (Windows 7); frames present at once")
+				}
+			}
 			if failed(hr) {
 				return fmt.Errorf("d3d11: cannot create the swap chain: %#x", uint32(hr))
 			}
@@ -617,7 +634,7 @@ func (r *Renderer) buffers(w, h, bw, bh, n int) error {
 			call(r.swapChain2, scSetMaxLatency, 1)
 			r.lat.handle = call(r.swapChain2, scLatencyWaitable)
 		}
-	} else if hr := call(r.swapChain, scResizeBuffers, uintptr(n), uintptr(bw), uintptr(bh), 0, swapChainWaitable); failed(hr) {
+	} else if hr := call(r.swapChain, scResizeBuffers, uintptr(n), uintptr(bw), uintptr(bh), 0, uintptr(r.swapChainFlags())); failed(hr) {
 		return fmt.Errorf("d3d11: cannot resize the swap chain: %#x", uint32(hr))
 	}
 	if err := r.setSourceSize(r.shown(w, h, bw, bh)); err != nil {
@@ -1199,7 +1216,7 @@ func (r *Renderer) drawBuilt(s *scene.Scene, b *gpu.Builder, rtv uintptr, part *
 	call(ctx, ctxOMSetRenderTargets, 1, uintptr(unsafe.Pointer(&rtv)), 0)
 	clear := s.Clear.Premul(1)
 	areas := []gpu.Scissor{{Right: int32(s.Width), Bottom: int32(s.Height)}}
-	if part != nil {
+	if part != nil && r.ctx1 != 0 {
 		areas = part.Rects
 		call(r.ctx1, ctx1ClearView, rtv, uintptr(unsafe.Pointer(&clear[0])), uintptr(unsafe.Pointer(&areas[0])), uintptr(len(areas)))
 	} else {

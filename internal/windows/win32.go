@@ -87,6 +87,7 @@ var (
 
 	// user32
 	procSetProcessDpiAwarenessContext = user32.NewProc("SetProcessDpiAwarenessContext")
+	procSetProcessDPIAware            = user32.NewProc("SetProcessDPIAware")
 	procGetDpiForWindow               = user32.NewProc("GetDpiForWindow")
 	procGetDpiForSystem               = user32.NewProc("GetDpiForSystem")
 	procAdjustWindowRectExForDpi      = user32.NewProc("AdjustWindowRectExForDpi")
@@ -185,6 +186,7 @@ var (
 
 	// gdi32
 	procCreateSolidBrush   = gdi32.NewProc("CreateSolidBrush")
+	procGetDeviceCaps      = gdi32.NewProc("GetDeviceCaps")
 	procDeleteObject       = gdi32.NewProc("DeleteObject")
 	procCreateCompatibleDC = gdi32.NewProc("CreateCompatibleDC")
 	procDeleteDC           = gdi32.NewProc("DeleteDC")
@@ -704,8 +706,20 @@ func dpiOf(hwnd uintptr) int {
 			return int(d)
 		}
 	}
+	// Windows 7 has neither: the device context of the window, or of the screen
+	// without one, tells the DPI the process knows.
+	if dc, _, _ := procGetDC.Call(hwnd); dc != 0 {
+		d, _, _ := procGetDeviceCaps.Call(dc, logPixelsX)
+		procReleaseDC.Call(hwnd, dc)
+		if d != 0 {
+			return int(d)
+		}
+	}
 	return 96
 }
+
+// logPixelsX is LOGPIXELSX: the DPI of a device context's width.
+const logPixelsX = 88
 
 // Conversions between DIPs (the unit of the public API) and pixels.
 func toPx(v, dpi int) int32      { return int32((v*dpi + 48) / 96) }
