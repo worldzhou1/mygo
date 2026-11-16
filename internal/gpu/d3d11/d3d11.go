@@ -559,6 +559,12 @@ const (
 
 var settleDelay = time.Second
 
+// flipRefused remembers that this process's swap chains have to use the bitblt
+// model: Windows 7 without the flip model, or a window that cannot show one
+// (the flip model refuses child and layered windows). Once known, renderers
+// made later start with the bitblt chain instead of failing twice each time.
+var flipRefused bool
+
 // resize makes the swap chain show w×h pixels.
 func (r *Renderer) resize(w, h int) error {
 	if r.swapChain != 0 && w == r.w && h == r.h {
@@ -592,6 +598,12 @@ func (r *Renderer) buffers(w, h, bw, bh, n int) error {
 	if r.swapChain == 0 {
 		desc := swapChainDesc1{Width: uint32(bw), Height: uint32(bh), Format: formatB8G8R8A8Unorm, SampleCount: 1,
 			BufferUsage: 0x20, BufferCount: uint32(n), Scaling: scalingStretch, SwapEffect: 3 /* flip sequential */, Flags: swapChainWaitable}
+		if flipRefused {
+			// Bitblt model: one buffer, no frame latency object. It works on
+			// Windows 7 without the flip model, and on child/layered windows.
+			desc.SwapEffect, desc.BufferCount, desc.Flags = 0 /* discard */, 1, 0
+			r.waitable = false
+		}
 		if r.composed {
 			if err := r.composeSwapChain(desc); err != nil {
 				return err
@@ -619,6 +631,19 @@ func (r *Renderer) buffers(w, h, bw, bh, n int) error {
 				hr = call(r.factory, factoryCreateSwapChainHwnd, r.device, r.hwnd, uintptr(unsafe.Pointer(&desc)), 0, 0, uintptr(unsafe.Pointer(&r.swapChain)))
 				if !failed(hr) {
 					log.Printf("mygo: the swap chain has no frame latency object (Windows 7); frames present at once")
+				}
+			}
+			if failed(hr) {
+				// Last resort, and the normal path on Windows 7 when the window
+				// cannot show a flip chain: the bitblt model needs one buffer
+				// and no waitable object.
+				first := hr
+				desc.SwapEffect, desc.BufferCount, desc.Flags, desc.Scaling = 0 /* discard */, 1, 0, scalingStretch
+				r.waitable = false
+				hr = call(r.factory, factoryCreateSwapChainHwnd, r.device, r.hwnd, uintptr(unsafe.Pointer(&desc)), 0, 0, uintptr(unsafe.Pointer(&r.swapChain)))
+				if !failed(hr) {
+					flipRefused = true
+					log.Printf("mygo: the flip model was refused (%#x); using the bitblt swap chain", uint32(first))
 				}
 			}
 			if failed(hr) {
