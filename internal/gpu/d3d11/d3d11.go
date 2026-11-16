@@ -626,7 +626,7 @@ func (r *Renderer) buffers(w, h, bw, bh, n int) error {
 	if r.swapChain == 0 {
 		desc := swapChainDesc1{Width: uint32(bw), Height: uint32(bh), Format: formatB8G8R8A8Unorm, SampleCount: 1,
 			BufferUsage: 0x20, BufferCount: uint32(n), Scaling: scalingStretch, SwapEffect: 3 /* flip sequential */, Flags: swapChainWaitable}
-		if windows7() && os.Getenv("MYGO_BITBLT") == "1" {
+		if windows7() {
 			// Windows 7: the bitblt model, always. Its flip model is what
 			// flickers there, and Present1 with dirty rects is flip-only.
 			desc.SwapEffect, desc.BufferCount, desc.Flags, desc.Scaling = 0 /* discard */, 1, 0, scalingStretch
