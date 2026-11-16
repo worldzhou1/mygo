@@ -743,8 +743,11 @@ func (s *surface) message(hwnd uintptr, m uint32, wp, lp uintptr) (uintptr, bool
 		}
 		s.send(platform.SurfaceEvent{Kind: platform.SurfaceResize})
 		// Draw at once, so the content follows the window while it is
-		// resized.
+		// resized. Invalidate afterwards too: Windows 7 keeps the surface the
+		// window had before the resize when nothing else asks for a paint, and
+		// the window then shows a blank or black area until something does.
 		s.drawNow()
+		procInvalidateRectW.Call(hwnd, 0, 0)
 		return 0, true
 	case wmPointerDown, wmPointerUpdate, wmPointerUp:
 		// A pen or a finger, whose mouse messages DefWindowProc makes.

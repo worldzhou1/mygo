@@ -580,6 +580,9 @@ var waitableRefused bool
 // process: it is expected on Windows 7, not something to repeat.
 var waitableLogged bool
 
+// bitbltLogged keeps the Windows 7 swap chain notice to one line.
+var bitbltLogged bool
+
 // resize makes the swap chain show w×h pixels.
 func (r *Renderer) resize(w, h int) error {
 	if r.swapChain != 0 && w == r.w && h == r.h {
@@ -591,6 +594,11 @@ func (r *Renderer) resize(w, h int) error {
 	}
 	if r.swapChain == 0 || r.swapChain2 == 0 {
 		return r.buffers(w, h, w, h, 2)
+	}
+	if r.bitblt {
+		// Present1's source rectangle is what the partial resize shows with;
+		// the bitblt chain presents whole frames, so take the new size at once.
+		return r.buffers(w, h, w, h, 1)
 	}
 	r.resizedAt = time.Now()
 	r.armSettle()
@@ -608,16 +616,25 @@ func (r *Renderer) resize(w, h int) error {
 // buffers makes the swap chain n buffers of bw×bh pixels, which shows w×h
 // of them.
 func (r *Renderer) buffers(w, h, bw, bh, n int) error {
+	if r.bitblt {
+		// A bitblt chain has one buffer: ResizeBuffers takes the count it was
+		// made with, or fails.
+		n = 1
+	}
 	free(&r.rtv)
 	r.held = false
 	if r.swapChain == 0 {
 		desc := swapChainDesc1{Width: uint32(bw), Height: uint32(bh), Format: formatB8G8R8A8Unorm, SampleCount: 1,
 			BufferUsage: 0x20, BufferCount: uint32(n), Scaling: scalingStretch, SwapEffect: 3 /* flip sequential */, Flags: swapChainWaitable}
-		if windows7() {
+		if windows7() && os.Getenv("MYGO_BITBLT") == "1" {
 			// Windows 7: the bitblt model, always. Its flip model is what
 			// flickers there, and Present1 with dirty rects is flip-only.
 			desc.SwapEffect, desc.BufferCount, desc.Flags, desc.Scaling = 0 /* discard */, 1, 0, scalingStretch
 			r.waitable, r.bitblt = false, true
+			if !bitbltLogged {
+				bitbltLogged = true
+				log.Printf("mygo: Windows 7: bitblt swap chain, whole frames (the flip model flickers there)")
+			}
 		} else if flipRefused {
 			// Bitblt model: one buffer, no frame latency object. It works on
 			// Windows 7 without the flip model, and on child/layered windows.
@@ -701,6 +718,11 @@ func (r *Renderer) buffers(w, h, bw, bh, n int) error {
 		return fmt.Errorf("d3d11: cannot create the render target view: %#x", uint32(hr))
 	}
 	r.w, r.h = w, h
+	// A buffer made or resized holds whatever the driver left in it, not the
+	// frame drawn last: the next frame draws whole, so the swap chain cannot
+	// keep showing a blank one (a resize used to leave a black or white window
+	// until something else changed the scene).
+	r.held = false
 	return nil
 }
 
@@ -1868,6 +1890,14 @@ func (r *Renderer) show(sync uintptr) error {
 	}
 	return nil
 }
+
+// Invalidate tells that the swap chain no longer holds the last frame the
+// window shows (a resize, a window uncovered or shown again): the next frame
+// draws whole instead of leaving the window blank because the scene did not
+// change. The other renderers (gl, metal) have the same method; without it the
+// invalidator assertion in ui fails silently and Windows 7 windows stay blank
+// after a resize until an input changes the scene.
+func (r *Renderer) Invalidate() { r.held = false }
 
 // FrameInfo describes the last frame for MYGO_FRAME_STATS.
 func (r *Renderer) FrameInfo() string {
