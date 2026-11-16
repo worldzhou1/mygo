@@ -422,7 +422,7 @@ func newRenderer(hwnd uintptr, composed bool) (*Renderer, error) {
 	if hwnd == 0 {
 		return nil, errors.New("d3d11: no window")
 	}
-	r := &Renderer{hwnd: hwnd, composed: composed, waitable: true, images: map[uint64]*texture{}}
+	r := &Renderer{hwnd: hwnd, composed: composed, waitable: !waitableRefused, images: map[uint64]*texture{}}
 	var err error
 	if r.device, r.ctx, r.warp, err = device.New(); err != nil {
 		return nil, err
@@ -565,6 +565,15 @@ var settleDelay = time.Second
 // made later start with the bitblt chain instead of failing twice each time.
 var flipRefused bool
 
+// waitableRefused records that this system refuses the frame latency waitable
+// object (Windows 7 without the 8.1 object). Remembered so later renderers do
+// not retry it and do not log the same line again.
+var waitableRefused bool
+
+// waitableLogged keeps the "no frame latency object" notice to one line per
+// process: it is expected on Windows 7, not something to repeat.
+var waitableLogged bool
+
 // resize makes the swap chain show w×h pixels.
 func (r *Renderer) resize(w, h int) error {
 	if r.swapChain != 0 && w == r.w && h == r.h {
@@ -630,7 +639,13 @@ func (r *Renderer) buffers(w, h, bw, bh, n int) error {
 				desc.Flags = 0
 				hr = call(r.factory, factoryCreateSwapChainHwnd, r.device, r.hwnd, uintptr(unsafe.Pointer(&desc)), 0, 0, uintptr(unsafe.Pointer(&r.swapChain)))
 				if !failed(hr) {
-					log.Printf("mygo: the swap chain has no frame latency object (Windows 7); frames present at once")
+					waitableRefused = true
+					if !waitableLogged {
+						waitableLogged = true
+						// Expected on Windows 7: the frame latency object came with
+						// Windows 8.1, so frames present without waiting for it.
+						log.Printf("mygo: Windows 7 has no frame latency object; the GPU is in use, frames present at once (expected, not an error)")
+					}
 				}
 			}
 			if failed(hr) {
